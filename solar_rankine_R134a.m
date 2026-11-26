@@ -1,4 +1,9 @@
 %% SOLAR_RANKINE_R134A  Interactive solar-driven R-134a (Freon) Rankine cycle model
+%  Two modes:  1 = steady-state design point (hours of sun, sun angle, pump power -> W_out)
+%              2 = 24 h transient simulation: collector -> storage tank -> Rankine cycle,
+%                  with equipment switches, energy-balance checks and plots.
+%  Mode 2 uses the same equations, controller and defaults as the Python/Streamlit app.
+%
 %  Sunlight heats a direct-evaporation collector (the evaporator). R-134a vapor
 %  expands through a turbine, condenses, and a pump returns the liquid to the
 %  evaporator. A thermal store can carry surplus daytime heat into the night.
@@ -7,7 +12,7 @@
 %           Answer each prompt, or press Enter to accept the [default].
 %           No toolboxes needed (base MATLAB, R2016b or newer).
 %
-%  OUTPUT:  W_out (net turbine work minus pump work) in W, state-point table,
+%  OUTPUT (mode 1): W_out (net turbine work minus pump work) in W, state-point table,
 %           daily energy in Wh, a T-s diagram, and an optional sweep of
 %           evaporator temperature.
 %
@@ -32,6 +37,11 @@ tab = loadR134aTable();
 
 fprintf('\n=== Solar R-134a Rankine cycle ===\n');
 fprintf('Press Enter to accept the [default] shown for any input.\n\n');
+mode = askNum('Mode: 1 = steady-state design point, 2 = 24 h transient simulation', 1, 1, 2);
+if round(mode) == 2
+    runTransient(tab);
+    return;
+end
 
 %% ---------------- Inputs ----------------
 tsun  = askNum('Hours of direct sun per day [h]', 6, 0.1, 24);
@@ -215,9 +225,10 @@ if doSweep
 end
 
 %% ======================= Local functions =======================
-function c = rankineCycle(Te, Tc, eta_t, eta_p, tab)
+function c = rankineCycle(Te, Tc, eta_t, eta_p, tab, valveOpen)
 % Ideal-pressure Rankine cycle, states numbered as in Borgnakke & Sonntag:
 % 1 = pump inlet, 2 = pump exit, 3 = turbine inlet, 4 = turbine exit.
+    if nargin < 6, valveOpen = true; end                 % false = turbine isolated, throttle bypass
     c.Pe = sat(tab, 'P', Te);   c.Pc = sat(tab, 'P', Tc);
     c.h1 = sat(tab, 'hf', Tc);  c.v1 = sat(tab, 'vf', Tc);
     c.wp = c.v1*(c.Pe - c.Pc)/eta_p;                     % kPa*m^3/kg = kJ/kg
@@ -227,7 +238,11 @@ function c = rankineCycle(Te, Tc, eta_t, eta_p, tab)
     hgc = sat(tab, 'hg', Tc);
     c.x4s = (s3 - sfc)/(sgc - sfc);                      % isentropic exit quality
     h4s   = c.h1 + c.x4s*(hgc - c.h1);
-    c.wt  = eta_t*(c.h3 - h4s);
+    if valveOpen
+        c.wt = eta_t*(c.h3 - h4s);
+    else
+        c.wt = 0;                                        % isenthalpic throttle, h4 = h3
+    end
     c.h4  = c.h3 - c.wt;
     c.x4  = (c.h4 - c.h1)/(hgc - c.h1);                  % > 1 means superheated exit
     c.qin  = c.h3 - c.h2;
@@ -258,9 +273,9 @@ end
 function y = sat(tab, name, T)
 % Saturation property of R-134a at temperature T [C] by PCHIP interpolation.
     if strcmp(name, 'P')
-        y = exp(interp1(tab.T, log(tab.P), T, 'pchip'));
+        y = exp(ppval(tab.pp.P, T));
     else
-        y = interp1(tab.T, tab.(name), T, 'pchip');
+        y = ppval(tab.pp.(name), T);
     end
 end
 
@@ -328,4 +343,275 @@ function tab = loadR134aTable()
     ];
     tab.T  = D(:,1);  tab.P  = D(:,2);  tab.vf = D(:,3);
     tab.hf = D(:,4);  tab.hg = D(:,5);  tab.sf = D(:,6);  tab.sg = D(:,7);
+    % Piecewise-cubic Hermite (PCHIP) coefficients, built once (same result as interp1 'pchip').
+    tab.pp.P  = pchip(tab.T, log(tab.P));
+    tab.pp.vf = pchip(tab.T, tab.vf);
+    tab.pp.hf = pchip(tab.T, tab.hf);  tab.pp.hg = pchip(tab.T, tab.hg);
+    tab.pp.sf = pchip(tab.T, tab.sf);  tab.pp.sg = pchip(tab.T, tab.sg);
+end
+
+%% ======================= 24 h transient mode =======================
+function runTransient(tab)
+% Interactive front end for the 24 h simulation. Defaults equal the Python app's
+% baseline, so pressing Enter at every prompt reproduces it.
+    fprintf('\n--- 24 h transient simulation ---\n');
+    fprintf('Sun -> collector -> storage tank -> evaporator -> turbine -> condenser -> pump.\n');
+    fprintf('The tank is a transient control volume; the four cycle devices are steady-flow.\n\n');
+    P.lat    = askNum('Latitude [deg N]', 34.05, -60, 60);
+    P.day    = round(askNum('Day of year (172 = Jun 21, 355 = Dec 21)', 172, 1, 365));
+    P.clear  = askNum('Sky clearness [-] (1 = clear sky)', 1, 0.2, 1);
+    P.Tmean  = askNum('Mean ambient temperature [C]', 22, 5, 40);
+    P.Tswing = askNum('Daily ambient swing, peak to peak [K]', 12, 0, 25);
+    P.area   = askNum('Collector area [m^2]', 8, 0.5, 100);
+    P.tilt   = askNum('Collector tilt from horizontal [deg]', 30, 0, 90);
+    P.tankL  = askNum('Storage tank water volume [L]', 500, 50, 1e4);
+    P.pumpW  = askNum('Pump input power at full flow [W]', 30, 1, 1e4);
+    P.eta_t  = askNum('Turbine isentropic efficiency [-]', 0.80, 0.3, 1);
+    P.eta_p  = askNum('Pump isentropic efficiency [-]', 0.70, 0.2, 1);
+    P.Tcut   = askNum('Plant starts when the tank reaches [C]', 70, 30, 95);
+    P.Tfull  = askNum('Full flow when the tank reaches [C]', 85, P.Tcut + 1, 98);
+    P.pumpOn    = askYN('Pump running?', true);
+    P.valveOpen = askYN('Turbine valve open? (n = throttle bypass, no work)', true);
+    P.collOn    = askYN('Collector exposed to the sun?', true);
+    P.eta0 = 0.75;  P.a1 = 1.5;  P.a2 = 0.005;       % collector
+    P.UA = 3;  P.Tinit = 30;                          % tank loss [W/K], start-up temperature [C]
+    P.pinch = 5;  P.approach = 8;  P.Tmax = 98;       % K, K, C
+    if askYN('Edit collector, tank-loss and cycle details?', false)
+        P.eta0     = askNum('  Optical efficiency eta0 [-]', P.eta0, 0.2, 0.95);
+        P.a1       = askNum('  Loss coefficient a1 [W/m^2/K]', P.a1, 0, 10);
+        P.a2       = askNum('  Loss coefficient a2 [W/m^2/K^2]', P.a2, 0, 0.1);
+        P.UA       = askNum('  Tank heat-loss coefficient UA [W/K]', P.UA, 0, 50);
+        P.pinch    = askNum('  Tank to turbine-inlet temperature drop [K]', P.pinch, 1, 20);
+        P.approach = askNum('  Condenser above ambient [K]', P.approach, 3, 20);
+        P.Tmax     = askNum('  Collector defocuses near [C]', P.Tmax, 80, 99);
+    end
+    fprintf('\nIntegrating four days (three warm-up days, then the reported day) ...\n');
+    R = simulateDay(P, tab);
+    reportDay(P, R);
+    plotDay(P, R, tab);
+end
+
+function R = simulateDay(P, tab)
+% Integrate the tank ODE with the quasi-steady cycle. State vector:
+%  y(1) tank temperature [C]       y(2) incident beam energy [J]
+%  y(3) collector heat [J]         y(4) evaporator heat [J]     y(5) tank loss [J]
+%  y(6) turbine work [J]           y(7) pump work [J]           y(8) condenser heat [J]
+%  y(9) exergy fed to the cycle [J]  y(10) circulated mass [kg]
+% The energy terms are integrated by the same solver as the tank temperature,
+% so the energy balance can be checked without post-processing error.
+    C     = P.tankL * 4186;                    % tank heat capacity [J/K], 1 kg/L, cp = 4.186 kJ/kg-K
+    nWarm = 3;                                 % warm-up days so the tank state is periodic
+    t0    = nWarm*86400;  tEnd = (nWarm + 1)*86400;
+    tEval = 0:300:tEnd;                        % 5 min output grid
+    y0    = [P.Tinit, zeros(1, 9)];
+    opts  = odeset('RelTol', 1e-6, 'AbsTol', [1e-8, 1e-3*ones(1,8), 1e-9], 'MaxStep', 300);
+    [t, Y] = ode45(@(tt, y) plantRHS(tt, y, P, tab, C), tEval, y0, opts);
+    i0 = find(t >= t0, 1, 'first');
+    t  = t(i0:end);  Y = Y(i0:end, :);
+    n  = numel(t);
+    S  = plantInstant(P, t(1), Y(1,1), tab);
+    S  = repmat(S, 1, n);
+    for i = 2:n
+        S(i) = plantInstant(P, t(i), Y(i,1), tab);
+    end
+    R.th = (t - t0)/3600;                      % hours of the reported day
+    R.S  = S;
+    R.Ts = Y(:,1);
+    wh = 1/3600;  D = Y(end,:) - Y(1,:);
+    K.Einc = D(2)*wh;  K.Ecol = D(3)*wh;  K.Eev = D(4)*wh;  K.Eloss = D(5)*wh;
+    K.Wt = D(6)*wh;    K.Wp = D(7)*wh;    K.Qc = D(8)*wh;   Ex = D(9)*wh;  K.mass = D(10);
+    K.Wnet = K.Wt - K.Wp;
+    K.eta_cycle = safeDiv(K.Wnet, K.Eev);
+    K.eta_daily = safeDiv(K.Wnet, K.Einc);
+    K.eta_II    = safeDiv(K.Wnet, Ex);
+    dd = diff(R.th(:)');
+    w  = [dd(1)/2, (dd(1:end-1) + dd(2:end))/2, dd(end)/2];     % trapezoid weights, sum = 24 h
+    frac = [S.frac];  running = frac > 0.05;  night = [S.alt] <= 0;
+    K.runH = sum(w(running));  K.nightRunH = sum(w(running & night));
+    K.peakW = max([S.Wnet]);  K.TsMax = max(R.Ts);  K.TsMin = min(R.Ts);
+    x4 = [S.x4];  K.x4min = min(x4(running));  if isempty(K.x4min), K.x4min = NaN; end
+    K.PeMax = max([S.Pe]);
+    % conservation checks
+    dU = C*(R.Ts(end) - R.Ts(1));                                % J
+    K.resTank  = dU - (D(3) - D(4) - D(5));                     % tank: dU - (Qcol - Qev - Qloss)
+    K.resTankRel = abs(K.resTank)/max(D(3), 1);
+    K.resCyc   = D(4) - D(8) - (D(6) - D(7));                   % cycle: Qev - Qcond - Wnet
+    K.resCycRel = abs(K.resCyc)/max(D(4), 1);
+    R.K = K;  R.P = P;
+end
+
+function dy = plantRHS(t, y, P, tab, C)
+    d  = plantInstant(P, t, y(1), tab);
+    dy = [(d.Qcol - d.Qev - d.Qloss)/C; d.Geff*P.area; d.Qcol; d.Qev; d.Qloss; ...
+          d.Wt; d.Wp; d.Qc; d.Ex; d.mdot];
+end
+
+function d = plantInstant(P, t, Ts, tab)
+% Every instantaneous quantity for time t [s] and tank temperature Ts [C].
+    hour = mod(t/3600, 24);
+    [sinAlt, alt] = sunPos(hour, P.lat, P.day);
+    dni  = beamIrr(sinAlt, P.day, P.clear);
+    Geff = dni * cosInc(hour, P.lat, P.day, P.tilt);
+    Ta   = P.Tmean + 0.5*P.Tswing*cos(2*pi*(hour - 15)/24);
+    taper = clip01((P.Tmax - Ts)/5);                  % collector defocuses near Tmax
+    if P.collOn
+        dT   = Ts - Ta;
+        Qcol = P.area*max(0, P.eta0*Geff - P.a1*dT - P.a2*dT^2)*taper;
+    else
+        Qcol = 0;
+    end
+    Qloss = P.UA*(Ts - Ta);
+    Te = min(Ts - P.pinch, 95);                       % turbine-inlet (evaporator) temperature
+    Tc = max(Ta + P.approach, 1);                     % condensing temperature (table starts at 0 C)
+    if P.pumpOn
+        frac = clip01((Ts - P.Tcut)/max(P.Tfull - P.Tcut, 1e-6));
+    else
+        frac = 0;
+    end
+    frac = frac*clip01((Te - Tc - 6)/4);              % no flow without enough temperature lift
+    d = struct('hour',hour,'alt',alt,'dni',dni,'Geff',Geff,'Ta',Ta,'Ts',Ts,'Te',Te,'Tc',Tc, ...
+               'Qcol',Qcol,'Qloss',Qloss,'frac',frac,'mdot',0,'Qev',0,'Qc',0,'Wt',0,'Wp',0, ...
+               'Wnet',0,'Ex',0,'Pe',NaN,'Pc',NaN,'x4',NaN,'eta',0);
+    if frac > 0
+        c = rankineCycle(Te, Tc, P.eta_t, P.eta_p, tab, P.valveOpen);
+        m = frac*P.pumpW/1000/c.wp;                   % kg/s: pump power sets the flow
+        d.mdot = m;
+        d.Qev  = m*c.qin*1000;
+        d.Qc   = m*(c.h4 - c.h1)*1000;
+        d.Wt   = m*c.wt*1000;
+        d.Wp   = m*c.wp*1000;
+        d.Wnet = d.Wt - d.Wp;
+        d.Pe   = c.Pe;  d.Pc = c.Pc;
+        d.x4   = min(c.x4, 1);
+        d.eta  = c.eta;
+        d.Ex   = d.Qev*(1 - (Ta + 273.15)/(Ts + 273.15));
+    end
+end
+
+function reportDay(P, R)
+    K = R.K;
+    fprintf('\n================ 24 h RESULTS ================\n');
+    fprintf('ENERGY (Wh per day)\n');
+    fprintf('  Beam energy on collector : %8.0f\n', K.Einc);
+    fprintf('  Collector heat           : %8.0f   (collector efficiency %.1f %%)\n', K.Ecol, 100*safeDiv(K.Ecol, K.Einc));
+    fprintf('  Heat to evaporator       : %8.0f\n', K.Eev);
+    fprintf('  Tank heat loss           : %8.0f\n', K.Eloss);
+    fprintf('  Turbine work             : %8.0f\n', K.Wt);
+    fprintf('  Pump work                : %8.0f\n', K.Wp);
+    fprintf('  Heat rejected            : %8.0f\n', K.Qc);
+    fprintf('  >>> NET WORK W_out       : %8.0f Wh   (24 h average %.1f W)\n', K.Wnet, K.Wnet/24);
+    fprintf('\nPERFORMANCE\n');
+    fprintf('  Peak net power           : %8.1f W\n', K.peakW);
+    fprintf('  Cycle efficiency         : %8.2f %%\n', 100*K.eta_cycle);
+    fprintf('  Solar to work            : %8.2f %%\n', 100*K.eta_daily);
+    fprintf('  Second-law efficiency    : %8.1f %%\n', 100*K.eta_II);
+    fprintf('  Plant run time           : %8.2f h  (%.2f h after sunset)\n', K.runH, K.nightRunH);
+    fprintf('  Tank temperature range   : %8.1f to %.1f C\n', K.TsMin, K.TsMax);
+    fprintf('  R-134a circulated        : %8.0f kg\n', K.mass);
+    fprintf('\nCONSERVATION CHECKS\n');
+    fprintf('  Tank:  dU - (Qcol - Qevap - Qloss) = %.2e J  (relative %.1e)\n', K.resTank, K.resTankRel);
+    fprintf('  Cycle: Qevap - Qcond - Wnet        = %.2e J  (relative %.1e)\n', K.resCyc, K.resCycRel);
+    fprintf('\nFEEDBACK\n');
+    if ~P.pumpOn
+        fprintf('  [i] Pump switched off: no mass flow and no power.\n');
+    elseif K.runH < 0.1
+        fprintf('  [x] The plant never started: the tank stayed below %.0f C. Add collector area or reduce tank volume.\n', P.Tcut);
+    end
+    if ~P.valveOpen && P.pumpOn
+        fprintf('  [!] Turbine valve closed: heat goes through the bypass throttle and no work is produced.\n');
+    end
+    if K.runH >= 0.1 && K.x4min < 0.88
+        fprintf('  [!] Turbine exit quality fell to %.2f (below about 0.88 liquid droplets erode the blades).\n', K.x4min);
+    end
+    if K.TsMax >= P.Tmax - 1
+        fprintf('  [!] The tank reached the collector limit and the collector defocused: heat was thrown away.\n');
+    end
+    if K.nightRunH > 0.5
+        fprintf('  [ok] The plant ran %.1f h after sunset on stored heat.\n', K.nightRunH);
+    end
+    if K.resTankRel < 1e-4 && K.resCycRel < 1e-6
+        fprintf('  [ok] Energy balances close.\n');
+    else
+        fprintf('  [x] Energy balance does not close; tighten the solver tolerance.\n');
+    end
+end
+
+function plotDay(P, R, tab)
+    S = R.S;  th = R.th;  blue = [0.145 0.49 0.88];  orange = [0.957 0.447 0.188];
+    figure('Name', '24 h simulation', 'Color', 'w', 'Position', [60 60 1150 750]);
+    subplot(2,3,1);
+    plot(th, R.Ts, '-', 'Color', blue, 'LineWidth', 1.8); hold on;
+    plot(th, [S.Ta], '-', 'Color', orange, 'LineWidth', 1.8);
+    ylabel('Temperature [C]'); xlabel('Solar time [h]'); grid on; xlim([0 24]);
+    legend('Tank', 'Ambient', 'Location', 'best'); title('Temperatures');
+    subplot(2,3,2);
+    plot(th, [S.Qcol]/1000, '-', 'Color', orange, 'LineWidth', 1.8); hold on;
+    plot(th, [S.Qev]/1000,  '-', 'Color', blue,   'LineWidth', 1.8);
+    ylabel('Heat rate [kW]'); xlabel('Solar time [h]'); grid on; xlim([0 24]);
+    legend('Collector', 'To evaporator', 'Location', 'best'); title('Heat flows');
+    subplot(2,3,3);
+    plot(th, [S.Wnet], '-', 'Color', blue, 'LineWidth', 1.8);
+    ylabel('Net power [W]'); xlabel('Solar time [h]'); grid on; xlim([0 24]); title('Net power output');
+    subplot(2,3,4);
+    plot(th, [S.mdot]*1000, '-', 'Color', blue, 'LineWidth', 1.8);
+    ylabel('Mass flow [g/s]'); xlabel('Solar time [h]'); grid on; xlim([0 24]); title('R-134a flow');
+    subplot(2,3,5);
+    yyaxis left;  plot(th, [S.Pe], '-', 'Color', blue, 'LineWidth', 1.8); ylabel('Evaporator pressure [kPa]');
+    yyaxis right; plot(th, [S.Pc], '-', 'Color', orange, 'LineWidth', 1.8); ylabel('Condenser pressure [kPa]');
+    xlabel('Solar time [h]'); grid on; xlim([0 24]); title('Cycle pressures');
+    subplot(2,3,6);
+    [~, kp] = max([S.Wnet]);
+    if S(kp).frac > 0
+        c = rankineCycle(S(kp).Te, S(kp).Tc, P.eta_t, P.eta_p, tab, P.valveOpen);
+        plot([tab.sf; flipud(tab.sg)], [tab.T; flipud(tab.T)], 'k-', 'LineWidth', 1); hold on;
+        [S1, T1] = cyclePath(tab, c, S(kp).Te, S(kp).Tc, P.eta_p);
+        plot(S1, T1, '-o', 'Color', blue, 'LineWidth', 1.8, 'MarkerFaceColor', blue);
+        xlabel('Entropy s [kJ/kg-K]'); ylabel('Temperature [C]'); xlim([0.15 1.0]); grid on;
+        title(sprintf('T-s at peak power (%.1f h)', th(kp)));
+    else
+        axis off; text(0.1, 0.5, 'Plant never ran: no cycle to draw');
+    end
+end
+
+function [sinAlt, alt] = sunPos(hour, lat, n)
+    [phi, dec] = hemi(lat, 23.45*sind(360*(284 + n)/365));
+    w = 15*(hour - 12);
+    sinAlt = sind(phi)*sind(dec) + cosd(phi)*cosd(dec)*cosd(w);
+    sinAlt = max(-1, min(1, sinAlt));
+    alt = asind(sinAlt);
+end
+
+function c = cosInc(hour, lat, n, tilt)
+% Equator-facing tilted surface: cos(theta) = sin(dec) sin(phi-tilt) + cos(dec) cos(phi-tilt) cos(w)
+    [phi, dec] = hemi(lat, 23.45*sind(360*(284 + n)/365));
+    w = 15*(hour - 12);
+    c = max(0, sind(dec)*sind(phi - tilt) + cosd(dec)*cosd(phi - tilt)*cosd(w));
+end
+
+function [phi, dec] = hemi(lat, dec)
+% Mirror the southern hemisphere so the collector always faces the equator.
+    if lat < 0
+        phi = -lat;  dec = -dec;
+    else
+        phi = lat;
+    end
+end
+
+function g = beamIrr(sinAlt, n, clearness)
+% Meinel clear-sky direct normal irradiance, blended to zero between 0 and 3 deg altitude.
+    if sinAlt <= 0
+        g = 0;  return;
+    end
+    airMass = 1/max(sinAlt, 0.02);
+    e0 = 1 + 0.033*cosd(360*n/365);
+    g  = 1353*e0*0.7^(airMass^0.678);
+    g  = clearness*g*min(1, sinAlt/sind(3));
+end
+
+function y = clip01(x)
+    y = min(max(x, 0), 1);
+end
+
+function r = safeDiv(a, b)
+    if b > 0, r = a/b; else, r = 0; end
 end
