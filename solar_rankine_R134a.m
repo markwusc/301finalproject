@@ -16,7 +16,7 @@
 %           daily energy in Wh, a T-s diagram, and an optional sweep of
 %           evaporator temperature.
 %
-%  MODEL ASSUMPTIONS
+% Assumptions:
 %   - Steady flow, no pressure drops in evaporator, condenser or piping.
 %   - State 1: saturated liquid leaving the condenser.
 %   - State 3: saturated vapor leaving the evaporator (no superheat).

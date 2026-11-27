@@ -2,7 +2,8 @@
 (function () {
 "use strict";
 const L = Lab, K = L.K;
-const PAGES = ["Main Menu", "Free Play", "Steady-State Calculator", "Missions", "Comparison", "Validation", "Assumptions"];
+const WEB = !!window.__WEB__;
+const PAGES = WEB ? ["Free Play", "Steady-State Calculator"] : ["Main Menu", "Free Play", "Steady-State Calculator", "Missions", "Comparison", "Validation", "Assumptions"];
 const app = { page: "Main Menu", completed: new Set(), fp: Object.assign({}, L.DEFAULT_PLANT), fpTab: "Plant (animated)", fpHour: 12.5,
   missionKey: "rankine", mission: {}, steadyIn: Object.assign({}, L.DEFAULT_STEADY), cmp: { A: null, B: null, presetA: "Baseline", presetB: "Large tank (all-night operation)" },
   disposers: [] };
@@ -392,7 +393,7 @@ function menuPage() {
 
 // ---------------------------------------------------------------- shell
 const main = document.getElementById("main"), nav = document.getElementById("nav"), done = document.getElementById("done");
-function updateCompleted() { const names = Object.keys(L.MISSIONS).filter((k) => app.completed.has(k)).map((k) => L.MISSIONS[k].title.split(":")[0]); done.textContent = "Missions completed: " + (names.length ? names.join(", ") : "none yet"); }
+function updateCompleted() { if (WEB) { done.style.display = "none"; return; } const names = Object.keys(L.MISSIONS).filter((k) => app.completed.has(k)).map((k) => L.MISSIONS[k].title.split(":")[0]); done.textContent = "Missions completed: " + (names.length ? names.join(", ") : "none yet"); }
 function navigate(page) {
   dispose(); app.page = page;
   for (const b of nav.children) b.classList.toggle("on", b.dataset.page === page);
@@ -401,7 +402,7 @@ function navigate(page) {
   try { history.replaceState(null, "", "#" + encodeURIComponent(page)); } catch (e) {}
 }
 PAGES.forEach((p) => nav.append(h("button", { class: "navb", "data-page": p, onclick: () => navigate(p) }, p)));
-let start = "Main Menu"; try { const q = decodeURIComponent(location.hash.slice(1)); if (PAGES.includes(q)) start = q; } catch (e) {}
+let start = WEB ? "Free Play" : "Main Menu"; try { const q = decodeURIComponent(location.hash.slice(1)); if (PAGES.includes(q)) start = q; } catch (e) {}
 window.__lab = { app, navigate };
 navigate(start);
 })();
