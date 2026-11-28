@@ -1,0 +1,46 @@
+Temperature stratification / temp gradient
+This affects the available thermal energy during discharge because this affects the available thermal energy during discharge
+
+Solar collector should account for solar irradiance for collector optical efficiency, thermal losses, collector area, incidence angle affects
+
+Distinguish the collector defocusing collector and evaporator temperature limit because they represent different physical and operational constraints
+
+The Rankeine cycle visualization should display the four thermodynamic state points, pressure temperature, enthalpy, entropy, the user should be able to understand how each component changes other things
+
+Dynamic ts diagram
+
+This should reflect the specific isentropic efficiency
+
+The model should reflect whether the model enters the two phase region
+
+Energy balance for all of them
+
+Display pump consumption, energy in, heat rejection, w out, electrical power
+
+This will show whether the cycle is worth it
+
+Instantaneous power vs accumulated storage energy
+
+Transient part is missing, transient operation
+
+Introduce a time dependent simulation to allow users to investigate, tank charging, thermal losses, nighttime discharge, changing solar irradiance, and the ability to maintain turbine operation after sunset
+
+Should operate with the same efficiency throughout the night, how can that be done?
+
+Control interface should demonstrate the physical consequences of changing variables. Include operating constraints to prevent physically unrealistic states. For example insufficient evaporator heat input. Excessive collector temperature. Ensure turbine operation outside the model temperature and pressure limits.
+
+Explain why, through the game, a particular operating condition improves or reduces plant performance
+
+Parameter sensitivities studies, operating condition comparisons, and optimization exercises. Have a user optimize parameters.
+
+Visualize the flow, they should be pipe where the flow of the fluid can be visualized. We want to see ideally what is happening inside the devices. 
+
+Another task could be to maximize useful heat transfer (heat master game). Maximize useful heat transfer from the solar collector. Minimize thermal losses.
+
+Power house, put the electrical signal. Task is to reach the highest net electrical power output.
+
+24hr engineer. Fully charge and discharge the thermal storage tank
+
+Operator game. Make a stable plant operation without triggering alarms. Alarms for pressure and temperature at each device.
+
+Cloud survivor. Maintain operation even with a sudden reduction in solar irradiance.
